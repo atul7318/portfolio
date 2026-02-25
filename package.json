@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
   "dev": "next dev",
-  "build": "next build && node scripts/postbuild.mjs",
-  "start": "node .next/standalone/server.js"
+  "build": "next build",
+  "start": "npx next start -H 0.0.0.0 -p $PORT"
 },
   "dependencies": {
     "@react-three/fiber": "^9.5.0",
