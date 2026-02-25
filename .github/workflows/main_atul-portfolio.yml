@@ -62,4 +62,5 @@ jobs:
           app-name: 'atul-portfolio'
           slot-name: 'Production'
           package: .
+          startup-command: 'node server.js'
           
