@@ -1,20 +1,10 @@
 "use client";
 
-import { Suspense, lazy } from "react";
 import { motion } from "framer-motion";
-
-const Scene3D = lazy(() => import("./Scene3D"));
 
 export default function Hero() {
   return (
     <section className="hero-section" id="hero">
-      {/* 3D Canvas Background */}
-      <div className="hero-canvas-wrapper">
-        <Suspense fallback={<div style={{ width: "100%", height: "100%", background: "#050508" }} />}>
-          <Scene3D type="hero" />
-        </Suspense>
-      </div>
-
       <div className="hero-content">
         <motion.div
           className="hero-label"

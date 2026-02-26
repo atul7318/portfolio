@@ -1,636 +1,571 @@
 "use client";
 
-import { useRef, useEffect, useCallback } from "react";
-import { Canvas, useFrame, useThree, extend } from "@react-three/fiber";
+import { useRef, useEffect, useCallback, useMemo } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
-import { useMemo } from "react";
 
-/* ─────────────────────────────────────────────
-   Custom Shader Materials
-   ───────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════
+   SHADERS
+   ═══════════════════════════════════════════════ */
 
-const heroVertexShader = /* glsl */ `
+/* ── Aurora Ribbon Vertex ── */
+const auroraVert = /* glsl */ `
   uniform float uTime;
   uniform float uMouseX;
   uniform float uMouseY;
-  uniform float uPixelRatio;
+  uniform float uIndex;
 
-  attribute float aSize;
-  attribute float aPhase;
-  attribute float aSpeed;
-  attribute vec3 aColor;
+  varying vec2 vUv;
+  varying float vElevation;
+  varying float vFog;
 
-  varying vec3 vColor;
-  varying float vAlpha;
+  void main() {
+    vUv = uv;
+    vec3 pos = position;
 
-  // Simplex-ish noise
-  vec3 mod289(vec3 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
-  vec4 mod289(vec4 x) { return x - floor(x * (1.0/289.0)) * 289.0; }
-  vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
-  float snoise(vec3 v) {
-    const vec2 C = vec2(1.0/6.0, 1.0/3.0);
-    const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
-    vec3 i  = floor(v + dot(v, C.yyy));
-    vec3 x0 = v - i + dot(i, C.xxx);
-    vec3 g = step(x0.yzx, x0.xyz);
-    vec3 l = 1.0 - g;
-    vec3 i1 = min(g.xyz, l.zxy);
-    vec3 i2 = max(g.xyz, l.zxy);
-    vec3 x1 = x0 - i1 + C.xxx;
-    vec3 x2 = x0 - i2 + C.yyy;
-    vec3 x3 = x0 - D.yyy;
-    i = mod289(i);
-    vec4 p = permute(permute(permute(
-      i.z + vec4(0.0, i1.z, i2.z, 1.0))
-      + i.y + vec4(0.0, i1.y, i2.y, 1.0))
-      + i.x + vec4(0.0, i1.x, i2.x, 1.0));
-    float n_ = 0.142857142857;
-    vec3 ns = n_ * D.wyz - D.xzx;
-    vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
-    vec4 x_ = floor(j * ns.z);
-    vec4 y_ = floor(j - 7.0 * x_);
-    vec4 x = x_ * ns.x + ns.yyyy;
-    vec4 y = y_ * ns.x + ns.yyyy;
-    vec4 h = 1.0 - abs(x) - abs(y);
-    vec4 b0 = vec4(x.xy, y.xy);
-    vec4 b1 = vec4(x.zw, y.zw);
-    vec4 s0 = floor(b0)*2.0 + 1.0;
-    vec4 s1 = floor(b1)*2.0 + 1.0;
-    vec4 sh = -step(h, vec4(0.0));
-    vec4 a0 = b0.xzyw + s0.xzyw*sh.xxyy;
-    vec4 a1 = b1.xzyw + s1.xzyw*sh.zzww;
-    vec3 p0 = vec3(a0.xy, h.x);
-    vec3 p1 = vec3(a0.zw, h.y);
-    vec3 p2 = vec3(a1.xy, h.z);
-    vec3 p3 = vec3(a1.zw, h.w);
-    vec4 norm = 1.79284291400159 - 0.85373472095314 *
-      vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3));
-    p0 *= norm.x; p1 *= norm.y; p2 *= norm.z; p3 *= norm.w;
-    vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
-    m = m * m;
-    return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+    // Multi-wave displacement
+    float freq1 = 0.8 + uIndex * 0.3;
+    float freq2 = 1.2 + uIndex * 0.2;
+    float speed = uTime * (0.4 + uIndex * 0.15);
+
+    float wave1 = sin(pos.x * freq1 + speed) * cos(pos.x * 0.3 + speed * 0.7);
+    float wave2 = sin(pos.x * freq2 - speed * 0.6) * 0.5;
+    float wave3 = cos(pos.x * 0.2 + speed * 0.3) * sin(pos.x * 1.5 - speed);
+
+    float elevation = (wave1 + wave2 + wave3) * (1.5 + uIndex * 0.5);
+
+    // Mouse influence — gentle warp
+    elevation += uMouseY * sin(pos.x * 0.5 + uTime) * 2.0;
+    pos.x += uMouseX * cos(pos.x * 0.3) * 1.5;
+
+    pos.y += elevation;
+    pos.z += sin(pos.x * 0.15 + uTime * 0.2) * 3.0 * (1.0 + uIndex);
+
+    vElevation = elevation;
+
+    vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
+    vFog = smoothstep(10.0, 120.0, -mvPos.z);
+    gl_Position = projectionMatrix * mvPos;
   }
+`;
+
+/* ── Aurora Ribbon Fragment ── */
+const auroraFrag = /* glsl */ `
+  uniform float uTime;
+  uniform vec3 uColor1;
+  uniform vec3 uColor2;
+  uniform float uIndex;
+
+  varying vec2 vUv;
+  varying float vElevation;
+  varying float vFog;
+
+  void main() {
+    // Color shifts along X and with elevation
+    float mix1 = sin(vUv.x * 3.14159 + uTime * 0.3 + uIndex) * 0.5 + 0.5;
+    vec3 color = mix(uColor1, uColor2, mix1);
+
+    // Brightness pulse from elevation
+    float brightness = 0.5 + abs(vElevation) * 0.12;
+    color *= brightness;
+
+    // Vertical fade — ribbon tapers at edges
+    float edgeFade = smoothstep(0.0, 0.15, vUv.y) * smoothstep(1.0, 0.85, vUv.y);
+
+    // Horizontal fade at extremes
+    float hFade = smoothstep(0.0, 0.1, vUv.x) * smoothstep(1.0, 0.9, vUv.x);
+
+    float alpha = edgeFade * hFade * (0.12 + abs(vElevation) * 0.04);
+    alpha *= (1.0 - vFog * 0.5);
+
+    // Shimmer
+    float shimmer = sin(vUv.x * 80.0 + uTime * 4.0) * 0.5 + 0.5;
+    alpha += shimmer * 0.02 * edgeFade;
+
+    gl_FragColor = vec4(color, alpha);
+  }
+`;
+
+/* ── Starfield Vertex ── */
+const starVert = /* glsl */ `
+  uniform float uTime;
+  uniform float uPixelRatio;
+  attribute float aSize;
+  attribute float aFlicker;
+
+  varying float vAlpha;
 
   void main() {
     vec3 pos = position;
 
-    // Flowing noise displacement
-    float t = uTime * 0.15;
-    float noiseVal = snoise(pos * 0.015 + t);
-    float noiseVal2 = snoise(pos * 0.025 - t * 0.7);
+    // Gentle drift
+    pos.y += sin(uTime * 0.1 + pos.x * 0.05) * 0.5;
+    pos.x += cos(uTime * 0.08 + pos.z * 0.03) * 0.3;
 
-    pos.x += noiseVal * 8.0;
-    pos.y += noiseVal2 * 6.0;
-    pos.z += snoise(pos * 0.02 + t * 0.5) * 5.0;
+    vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
 
-    // Mouse influence - particles flow away from mouse
-    float mouseInfluence = 1.0 / (1.0 + length(vec2(pos.x / 60.0 - uMouseX, pos.y / 40.0 - uMouseY)) * 3.0);
-    pos.x += uMouseX * mouseInfluence * 15.0;
-    pos.y += uMouseY * mouseInfluence * 10.0;
+    // Twinkle
+    float flicker = sin(uTime * aFlicker + pos.x + pos.y) * 0.4 + 0.6;
+    vAlpha = flicker;
 
-    // Breathing/pulse
-    float pulse = sin(uTime * 0.5 + aPhase) * 0.15 + 1.0;
-    pos *= pulse;
+    gl_PointSize = aSize * flicker * uPixelRatio * (60.0 / -mvPos.z);
+    gl_PointSize = max(gl_PointSize, 0.8);
 
-    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
-
-    // Size attenuation with pulse
-    float sizePulse = sin(uTime * aSpeed + aPhase) * 0.5 + 1.0;
-    gl_PointSize = aSize * sizePulse * uPixelRatio * (80.0 / -mvPosition.z);
-    gl_PointSize = max(gl_PointSize, 1.0);
-
-    gl_Position = projectionMatrix * mvPosition;
-
-    vColor = aColor;
-    // Distance-based alpha fade
-    float dist = length(pos) / 65.0;
-    vAlpha = smoothstep(1.2, 0.0, dist) * (0.5 + sizePulse * 0.3);
+    gl_Position = projectionMatrix * mvPos;
   }
 `;
 
-const heroFragmentShader = /* glsl */ `
-  varying vec3 vColor;
+/* ── Starfield Fragment ── */
+const starFrag = /* glsl */ `
   varying float vAlpha;
 
   void main() {
-    // Soft circular particle with glow
-    vec2 center = gl_PointCoord - 0.5;
-    float dist = length(center);
-
-    // Core
-    float core = smoothstep(0.5, 0.05, dist);
-    // Glow
-    float glow = smoothstep(0.5, 0.0, dist) * 0.4;
-
-    float alpha = (core + glow) * vAlpha;
+    float d = length(gl_PointCoord - 0.5);
+    float core = smoothstep(0.5, 0.0, d);
+    float glow = exp(-d * 6.0) * 0.6;
+    float alpha = (core + glow) * vAlpha * 0.7;
     if (alpha < 0.01) discard;
-
-    // Add slight bloom to color
-    vec3 color = vColor + vColor * core * 0.5;
-
+    vec3 color = mix(vec3(0.6, 0.8, 1.0), vec3(1.0), core);
     gl_FragColor = vec4(color, alpha);
   }
 `;
 
-/* ── Connection Line Shaders ── */
-const lineVertexShader = /* glsl */ `
-  attribute float aOpacity;
-  varying float vOpacity;
-
-  void main() {
-    vOpacity = aOpacity;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }
-`;
-
-const lineFragmentShader = /* glsl */ `
-  uniform vec3 uColor;
-  varying float vOpacity;
-
-  void main() {
-    gl_FragColor = vec4(uColor, vOpacity);
-  }
-`;
-
-/* ── About sphere shaders ── */
-const sphereVertexShader = /* glsl */ `
+/* ── Toroid Knot Glow Vertex ── */
+const knotVert = /* glsl */ `
   uniform float uTime;
-  uniform float uHover;
 
   varying vec3 vNormal;
-  varying vec3 vPosition;
-  varying float vDisplacement;
+  varying vec3 vWorldPos;
   varying vec2 vUv;
-
-  // Simplex noise (same as above, compressed)
-  vec3 mod289(vec3 x){return x-floor(x*(1.0/289.0))*289.0;}
-  vec4 mod289(vec4 x){return x-floor(x*(1.0/289.0))*289.0;}
-  vec4 permute(vec4 x){return mod289(((x*34.0)+1.0)*x);}
-  float snoise(vec3 v){
-    const vec2 C=vec2(1.0/6.0,1.0/3.0);const vec4 D=vec4(0,0.5,1,2);
-    vec3 i=floor(v+dot(v,C.yyy));vec3 x0=v-i+dot(i,C.xxx);
-    vec3 g=step(x0.yzx,x0.xyz);vec3 l=1.0-g;
-    vec3 i1=min(g,l.zxy);vec3 i2=max(g,l.zxy);
-    vec3 x1=x0-i1+C.xxx;vec3 x2=x0-i2+C.yyy;vec3 x3=x0-D.yyy;
-    i=mod289(i);
-    vec4 p=permute(permute(permute(i.z+vec4(0,i1.z,i2.z,1))+i.y+vec4(0,i1.y,i2.y,1))+i.x+vec4(0,i1.x,i2.x,1));
-    float n_=0.142857142857;vec3 ns=n_*D.wyz-D.xzx;
-    vec4 j=p-49.0*floor(p*ns.z*ns.z);vec4 x_=floor(j*ns.z);vec4 y_=floor(j-7.0*x_);
-    vec4 x=x_*ns.x+ns.yyyy;vec4 y=y_*ns.x+ns.yyyy;vec4 h=1.0-abs(x)-abs(y);
-    vec4 b0=vec4(x.xy,y.xy);vec4 b1=vec4(x.zw,y.zw);
-    vec4 s0=floor(b0)*2.0+1.0;vec4 s1=floor(b1)*2.0+1.0;
-    vec4 sh=-step(h,vec4(0));
-    vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy;vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;
-    vec3 p0=vec3(a0.xy,h.x);vec3 p1=vec3(a0.zw,h.y);vec3 p2=vec3(a1.xy,h.z);vec3 p3=vec3(a1.zw,h.w);
-    vec4 norm=1.79284291400159-0.85373472095314*vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3));
-    p0*=norm.x;p1*=norm.y;p2*=norm.z;p3*=norm.w;
-    vec4 m=max(0.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.0);m=m*m;
-    return 42.0*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
-  }
+  varying float vFresnel;
 
   void main() {
     vUv = uv;
-    vNormal = normal;
+    vNormal = normalize(normalMatrix * normal);
+    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+    vWorldPos = worldPos.xyz;
 
-    float t = uTime * 0.3;
-    // Multi-octave noise displacement
-    float n1 = snoise(normal * 1.5 + t) * 0.35;
-    float n2 = snoise(normal * 3.0 + t * 1.5) * 0.15;
-    float n3 = snoise(normal * 6.0 - t * 0.8) * 0.05;
-    float displacement = n1 + n2 + n3;
+    vec3 viewDir = normalize(cameraPosition - worldPos.xyz);
+    vFresnel = pow(1.0 - abs(dot(viewDir, vNormal)), 2.5);
 
-    // Hover amplification
-    displacement *= 1.0 + uHover * 0.6;
-
-    vec3 newPosition = position + normal * displacement;
-    vDisplacement = displacement;
-    vPosition = newPosition;
-
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(newPosition, 1.0);
+    gl_Position = projectionMatrix * viewMatrix * worldPos;
   }
 `;
 
-const sphereFragmentShader = /* glsl */ `
+/* ── Toroid Knot Glow Fragment ── */
+const knotFrag = /* glsl */ `
   uniform float uTime;
-  uniform float uHover;
   uniform vec3 uColor1;
   uniform vec3 uColor2;
-  uniform vec3 uColor3;
 
   varying vec3 vNormal;
-  varying vec3 vPosition;
-  varying float vDisplacement;
+  varying vec3 vWorldPos;
   varying vec2 vUv;
+  varying float vFresnel;
 
   void main() {
-    // Fresnel rim lighting
-    vec3 viewDir = normalize(cameraPosition - vPosition);
-    float fresnel = pow(1.0 - max(dot(viewDir, vNormal), 0.0), 3.0);
+    // Animated color band
+    float band = sin(vUv.x * 30.0 - uTime * 2.0) * 0.5 + 0.5;
+    vec3 color = mix(uColor1, uColor2, band);
 
-    // Color based on displacement
-    float d = vDisplacement * 2.0 + 0.5;
-    vec3 color = mix(uColor1, uColor2, smoothstep(0.0, 0.5, d));
-    color = mix(color, uColor3, smoothstep(0.5, 1.0, d));
+    // Energy pulse traveling along the knot
+    float pulse = sin(vUv.x * 60.0 - uTime * 5.0) * 0.5 + 0.5;
+    pulse = pow(pulse, 6.0);
 
-    // Scan line effect
-    float scanLine = sin(vPosition.y * 20.0 - uTime * 2.0) * 0.5 + 0.5;
-    scanLine = pow(scanLine, 8.0) * 0.15;
+    // Fresnel edge glow
+    float alpha = vFresnel * 0.6 + 0.05;
+    alpha += pulse * 0.3;
 
-    // Horizontal grid lines
-    float grid = smoothstep(0.02, 0.0, abs(fract(vUv.y * 30.0) - 0.5) - 0.48);
-    grid += smoothstep(0.02, 0.0, abs(fract(vUv.x * 30.0) - 0.5) - 0.48);
-    grid *= 0.08;
+    // Scan lines
+    float scan = sin(vWorldPos.y * 15.0 + uTime * 1.5) * 0.5 + 0.5;
+    scan = pow(scan, 12.0) * 0.2;
+    alpha += scan;
 
-    // Combine
-    float alpha = fresnel * 0.7 + 0.08 + scanLine + grid;
-    alpha = min(alpha, 0.85);
+    color += uColor2 * pulse * 0.5;
+    color += vec3(0.3, 0.5, 1.0) * vFresnel * 0.3;
 
-    // Glow more on peaks
-    color += vec3(0.15, 0.4, 1.0) * fresnel * 0.5;
-    color += uColor3 * scanLine;
-
-    gl_FragColor = vec4(color, alpha);
+    gl_FragColor = vec4(color, min(alpha, 0.9));
   }
 `;
 
-/* ─────────────────────────────────────────────
-   Hero Particle Field (GPU Shader-based)
-   ───────────────────────────────────────────── */
-function HeroParticleField() {
-  const pointsRef = useRef<THREE.Points>(null);
-  const lineRef = useRef<THREE.LineSegments>(null);
-  const materialRef = useRef<THREE.ShaderMaterial>(null);
+/* ── Data Stream Particle Vertex ── */
+const streamVert = /* glsl */ `
+  uniform float uTime;
+  uniform float uPixelRatio;
+  attribute float aAngle;
+  attribute float aSpeed;
+  attribute float aRadius;
 
-  const count = 600;
-  const connectionThreshold = 18;
-  const maxLines = 500;
+  varying float vAlpha;
 
-  // Color palette
-  const colors = useMemo(() => ({
-    cyan: new THREE.Color(0x00d4ff),
-    blue: new THREE.Color(0x0078ff),
-    purple: new THREE.Color(0x7b2fff),
-    pink: new THREE.Color(0xff006e),
-  }), []);
+  void main() {
+    // Orbit on a torus-like path
+    float t = uTime * aSpeed + aAngle;
 
-  const { positions, sizes, phases, speeds, particleColors, velocities } = useMemo(() => {
-    const pos: number[] = [];
-    const siz: number[] = [];
-    const pha: number[] = [];
-    const spd: number[] = [];
-    const col: number[] = [];
-    const vel: number[] = [];
+    float R = 2.0; // major radius
+    float r = aRadius; // minor radius
 
-    const colorArr = [
-      [0, 0.83, 1],     // cyan
-      [0, 0.47, 1],     // blue
-      [0.48, 0.18, 1],  // purple
-      [0, 0.65, 1],     // teal
-    ];
+    // Torus knot parametric (p=2, q=3 to match the mesh)
+    float p = 2.0;
+    float q = 3.0;
+    float rr = cos(q * t) + R;
+    vec3 pos;
+    pos.x = rr * cos(p * t);
+    pos.y = rr * sin(p * t);
+    pos.z = -sin(q * t);
+    pos *= 0.8;
 
-    for (let i = 0; i < count; i++) {
-      // Distribute in multiple formations
-      const formation = Math.random();
-      let x, y, z;
+    // Slight radial offset
+    pos += normalize(pos) * (r - 0.8) * 0.5;
 
-      if (formation < 0.35) {
-        // Spiral/helix band
-        const angle = (i / count) * Math.PI * 8 + Math.random() * 0.5;
-        const radius = 20 + Math.random() * 25;
-        x = Math.cos(angle) * radius + (Math.random() - 0.5) * 10;
-        y = (i / count - 0.5) * 80 + (Math.random() - 0.5) * 15;
-        z = Math.sin(angle) * radius + (Math.random() - 0.5) * 10;
-      } else if (formation < 0.65) {
-        // Sphere shell
-        const theta = Math.random() * Math.PI * 2;
-        const phi = Math.acos(2 * Math.random() - 1);
-        const r = 30 + Math.random() * 20;
-        x = r * Math.sin(phi) * Math.cos(theta);
-        y = r * Math.sin(phi) * Math.sin(theta);
-        z = r * Math.cos(phi);
-      } else {
-        // Random field volume
-        x = (Math.random() - 0.5) * 120;
-        y = (Math.random() - 0.5) * 80;
-        z = (Math.random() - 0.5) * 60;
-      }
+    vec4 mvPos = modelViewMatrix * vec4(pos, 1.0);
+    float flicker = sin(uTime * 3.0 + aAngle * 10.0) * 0.3 + 0.7;
+    vAlpha = flicker * 0.8;
 
-      pos.push(x, y, z);
+    gl_PointSize = (2.0 + r * 0.5) * flicker * uPixelRatio * (30.0 / -mvPos.z);
+    gl_PointSize = max(gl_PointSize, 1.0);
 
-      siz.push(1.5 + Math.random() * 3.0);
-      pha.push(Math.random() * Math.PI * 2);
-      spd.push(0.5 + Math.random() * 2.0);
+    gl_Position = projectionMatrix * mvPos;
+  }
+`;
 
-      const c = colorArr[Math.floor(Math.random() * colorArr.length)];
-      col.push(c[0], c[1], c[2]);
+/* ── Data Stream Particle Fragment ── */
+const streamFrag = /* glsl */ `
+  uniform vec3 uColor;
+  varying float vAlpha;
 
-      vel.push(
-        (Math.random() - 0.5) * 0.04,
-        (Math.random() - 0.5) * 0.03,
-        (Math.random() - 0.5) * 0.02
-      );
-    }
+  void main() {
+    float d = length(gl_PointCoord - 0.5);
+    float core = smoothstep(0.5, 0.0, d);
+    float glow = exp(-d * 5.0) * 0.5;
+    float alpha = (core + glow) * vAlpha;
+    if (alpha < 0.01) discard;
+    gl_FragColor = vec4(uColor * (1.0 + core * 0.4), alpha);
+  }
+`;
 
-    return {
-      positions: new Float32Array(pos),
-      sizes: new Float32Array(siz),
-      phases: new Float32Array(pha),
-      speeds: new Float32Array(spd),
-      particleColors: new Float32Array(col),
-      velocities: vel,
-    };
-  }, []);
+/* ═══════════════════════════════════════════════
+   HERO — Digital Aurora with Starfield
+   ═══════════════════════════════════════════════ */
 
-  // Connection lines
-  const linePositions = useMemo(() => new Float32Array(maxLines * 6), []);
-  const lineOpacities = useMemo(() => new Float32Array(maxLines * 2), []);
-  const lineGeometry = useMemo(() => {
-    const geo = new THREE.BufferGeometry();
-    const posAttr = new THREE.BufferAttribute(linePositions, 3);
-    posAttr.setUsage(THREE.DynamicDrawUsage);
-    geo.setAttribute("position", posAttr);
-    const opAttr = new THREE.BufferAttribute(lineOpacities, 1);
-    opAttr.setUsage(THREE.DynamicDrawUsage);
-    geo.setAttribute("aOpacity", opAttr);
-    geo.setDrawRange(0, 0);
-    return geo;
-  }, [linePositions, lineOpacities]);
-
-  const lineMaterial = useMemo(
-    () =>
-      new THREE.ShaderMaterial({
-        vertexShader: lineVertexShader,
-        fragmentShader: lineFragmentShader,
-        uniforms: { uColor: { value: new THREE.Color(0x00d4ff) } },
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      }),
-    []
-  );
-
+function AuroraRibbon({ index, color1, color2, yOffset }: {
+  index: number; color1: THREE.Color; color2: THREE.Color; yOffset: number;
+}) {
+  const matRef = useRef<THREE.ShaderMaterial>(null);
+  const meshRef = useRef<THREE.Mesh>(null);
   const mouseRef = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const handler = (e: MouseEvent) => {
+    const h = (e: MouseEvent) => {
       mouseRef.current.x = (e.clientX / window.innerWidth - 0.5) * 2;
       mouseRef.current.y = -(e.clientY / window.innerHeight - 0.5) * 2;
     };
-    window.addEventListener("mousemove", handler, { passive: true });
-    return () => window.removeEventListener("mousemove", handler);
+    window.addEventListener("mousemove", h, { passive: true });
+    return () => window.removeEventListener("mousemove", h);
   }, []);
 
-  const frameRef = useRef(0);
-
-  useFrame(({ clock, camera }) => {
-    if (!pointsRef.current || !materialRef.current) return;
-    frameRef.current++;
-
-    const time = clock.getElapsedTime();
-    materialRef.current.uniforms.uTime.value = time;
-    materialRef.current.uniforms.uMouseX.value +=
-      (mouseRef.current.x - materialRef.current.uniforms.uMouseX.value) * 0.05;
-    materialRef.current.uniforms.uMouseY.value +=
-      (mouseRef.current.y - materialRef.current.uniforms.uMouseY.value) * 0.05;
-
-    // Animate base positions
-    const pos = pointsRef.current.geometry.attributes.position.array as Float32Array;
-    for (let i = 0; i < count; i++) {
-      pos[i * 3] += velocities[i * 3];
-      pos[i * 3 + 1] += velocities[i * 3 + 1];
-      pos[i * 3 + 2] += velocities[i * 3 + 2];
-      const dist = Math.sqrt(pos[i * 3] ** 2 + pos[i * 3 + 1] ** 2 + pos[i * 3 + 2] ** 2);
-      if (dist > 70 || dist < 10) {
-        velocities[i * 3] *= -1;
-        velocities[i * 3 + 1] *= -1;
-        velocities[i * 3 + 2] *= -1;
-      }
-    }
-    pointsRef.current.geometry.attributes.position.needsUpdate = true;
-
-    // Slow global rotation
-    pointsRef.current.rotation.y = time * 0.02;
-    pointsRef.current.rotation.x = Math.sin(time * 0.01) * 0.1;
-
-    // Update connections every 8 frames
-    if (lineRef.current && frameRef.current % 8 === 0) {
-      let idx = 0;
-      const threshSq = connectionThreshold * connectionThreshold;
-      for (let i = 0; i < count && idx < maxLines; i++) {
-        for (let j = i + 1; j < count && idx < maxLines; j++) {
-          const dx = pos[i * 3] - pos[j * 3];
-          const dy = pos[i * 3 + 1] - pos[j * 3 + 1];
-          const dz = pos[i * 3 + 2] - pos[j * 3 + 2];
-          const dSq = dx * dx + dy * dy + dz * dz;
-          if (dSq < threshSq) {
-            const o = idx * 6;
-            linePositions[o] = pos[i * 3];
-            linePositions[o + 1] = pos[i * 3 + 1];
-            linePositions[o + 2] = pos[i * 3 + 2];
-            linePositions[o + 3] = pos[j * 3];
-            linePositions[o + 4] = pos[j * 3 + 1];
-            linePositions[o + 5] = pos[j * 3 + 2];
-            // Opacity fades with distance
-            const opacity = (1.0 - Math.sqrt(dSq) / connectionThreshold) * 0.25;
-            lineOpacities[idx * 2] = opacity;
-            lineOpacities[idx * 2 + 1] = opacity;
-            idx++;
-          }
-        }
-      }
-      lineGeometry.setDrawRange(0, idx * 2);
-      lineGeometry.attributes.position.needsUpdate = true;
-      lineGeometry.attributes.aOpacity.needsUpdate = true;
-      lineRef.current.rotation.copy(pointsRef.current.rotation);
-    }
-
-    // Mouse parallax camera
-    camera.position.x += (mouseRef.current.x * 12 - camera.position.x) * 0.015;
-    camera.position.y += (mouseRef.current.y * 8 - camera.position.y) * 0.015;
-    camera.lookAt(0, 0, 0);
+  useFrame(({ clock }) => {
+    if (!matRef.current) return;
+    matRef.current.uniforms.uTime.value = clock.getElapsedTime();
+    matRef.current.uniforms.uMouseX.value +=
+      (mouseRef.current.x - matRef.current.uniforms.uMouseX.value) * 0.03;
+    matRef.current.uniforms.uMouseY.value +=
+      (mouseRef.current.y - matRef.current.uniforms.uMouseY.value) * 0.03;
   });
 
   return (
+    <mesh ref={meshRef} position={[0, yOffset, -10 - index * 8]} rotation={[-0.15, 0, 0]}>
+      <planeGeometry args={[140, 12, 200, 1]} />
+      <shaderMaterial
+        ref={matRef}
+        vertexShader={auroraVert}
+        fragmentShader={auroraFrag}
+        uniforms={{
+          uTime: { value: 0 },
+          uMouseX: { value: 0 },
+          uMouseY: { value: 0 },
+          uIndex: { value: index },
+          uColor1: { value: color1 },
+          uColor2: { value: color2 },
+        }}
+        transparent
+        blending={THREE.AdditiveBlending}
+        depthWrite={false}
+        side={THREE.DoubleSide}
+      />
+    </mesh>
+  );
+}
+
+function Starfield() {
+  const matRef = useRef<THREE.ShaderMaterial>(null);
+  const count = 500;
+
+  const { positions, sizes, flickers } = useMemo(() => {
+    const pos = new Float32Array(count * 3);
+    const siz = new Float32Array(count);
+    const fli = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+      pos[i * 3] = (Math.random() - 0.5) * 160;
+      pos[i * 3 + 1] = (Math.random() - 0.5) * 100;
+      pos[i * 3 + 2] = -Math.random() * 80 - 5;
+      siz[i] = 0.8 + Math.random() * 2.5;
+      fli[i] = 1.0 + Math.random() * 4.0;
+    }
+    return { positions: pos, sizes: siz, flickers: fli };
+  }, []);
+
+  useFrame(({ clock }) => {
+    if (matRef.current) matRef.current.uniforms.uTime.value = clock.getElapsedTime();
+  });
+
+  return (
+    <points>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+        <bufferAttribute attach="attributes-aSize" args={[sizes, 1]} />
+        <bufferAttribute attach="attributes-aFlicker" args={[flickers, 1]} />
+      </bufferGeometry>
+      <shaderMaterial
+        ref={matRef}
+        vertexShader={starVert}
+        fragmentShader={starFrag}
+        uniforms={{
+          uTime: { value: 0 },
+          uPixelRatio: { value: typeof window !== "undefined" ? Math.min(window.devicePixelRatio, 2) : 1 },
+        }}
+        transparent
+        blending={THREE.AdditiveBlending}
+        depthWrite={false}
+      />
+    </points>
+  );
+}
+
+/* Floating geometric shapes drifting in the background */
+function FloatingShape({ position, rotation, speed, scale, color }: {
+  position: [number, number, number];
+  rotation: [number, number, number];
+  speed: number;
+  scale: number;
+  color: number;
+}) {
+  const ref = useRef<THREE.Mesh>(null);
+  const initY = position[1];
+
+  useFrame(({ clock }) => {
+    if (!ref.current) return;
+    const t = clock.getElapsedTime();
+    ref.current.rotation.x = rotation[0] + t * speed * 0.3;
+    ref.current.rotation.y = rotation[1] + t * speed * 0.5;
+    ref.current.rotation.z = rotation[2] + t * speed * 0.2;
+    ref.current.position.y = initY + Math.sin(t * speed * 0.4) * 2;
+  });
+
+  return (
+    <mesh ref={ref} position={position} scale={scale}>
+      <octahedronGeometry args={[1, 0]} />
+      <meshBasicMaterial color={color} wireframe transparent opacity={0.08} />
+    </mesh>
+  );
+}
+
+function HeroScene() {
+  const cameraRef = useRef({ x: 0, y: 0 });
+  const mouseRef = useRef({ x: 0, y: 0 });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const h = (e: MouseEvent) => {
+      mouseRef.current.x = (e.clientX / window.innerWidth - 0.5) * 2;
+      mouseRef.current.y = -(e.clientY / window.innerHeight - 0.5) * 2;
+    };
+    window.addEventListener("mousemove", h, { passive: true });
+    return () => window.removeEventListener("mousemove", h);
+  }, []);
+
+  useFrame(({ camera }) => {
+    cameraRef.current.x += (mouseRef.current.x * 8 - cameraRef.current.x) * 0.02;
+    cameraRef.current.y += (mouseRef.current.y * 5 - cameraRef.current.y) * 0.02;
+    camera.position.x = cameraRef.current.x;
+    camera.position.y = cameraRef.current.y;
+    camera.lookAt(0, 0, -20);
+  });
+
+  const ribbons = useMemo(() => [
+    { color1: new THREE.Color(0x00d4ff), color2: new THREE.Color(0x7b2fff), y: 8 },
+    { color1: new THREE.Color(0x0078ff), color2: new THREE.Color(0x00d4ff), y: 0 },
+    { color1: new THREE.Color(0x7b2fff), color2: new THREE.Color(0xff006e), y: -6 },
+    { color1: new THREE.Color(0x00d4ff), color2: new THREE.Color(0x0078ff), y: -14 },
+  ], []);
+
+  const shapes = useMemo(() => [
+    { pos: [-30, 15, -25] as [number, number, number], rot: [0.5, 0.3, 0] as [number, number, number], speed: 0.6, scale: 3, color: 0x00d4ff },
+    { pos: [35, -10, -30] as [number, number, number], rot: [0, 0.8, 0.2] as [number, number, number], speed: 0.4, scale: 2.5, color: 0x7b2fff },
+    { pos: [-20, -18, -20] as [number, number, number], rot: [0.2, 0, 0.7] as [number, number, number], speed: 0.5, scale: 2, color: 0x0078ff },
+    { pos: [25, 20, -35] as [number, number, number], rot: [0.7, 0.4, 0] as [number, number, number], speed: 0.35, scale: 3.5, color: 0x00d4ff },
+    { pos: [0, -25, -22] as [number, number, number], rot: [0, 0.6, 0.3] as [number, number, number], speed: 0.55, scale: 1.8, color: 0x7b2fff },
+  ], []);
+
+  return (
     <group>
-      <points ref={pointsRef}>
-        <bufferGeometry>
-          <bufferAttribute attach="attributes-position" args={[positions, 3]} />
-          <bufferAttribute attach="attributes-aSize" args={[sizes, 1]} />
-          <bufferAttribute attach="attributes-aPhase" args={[phases, 1]} />
-          <bufferAttribute attach="attributes-aSpeed" args={[speeds, 1]} />
-          <bufferAttribute attach="attributes-aColor" args={[particleColors, 3]} />
-        </bufferGeometry>
-        <shaderMaterial
-          ref={materialRef}
-          vertexShader={heroVertexShader}
-          fragmentShader={heroFragmentShader}
-          uniforms={{
-            uTime: { value: 0 },
-            uMouseX: { value: 0 },
-            uMouseY: { value: 0 },
-            uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-          }}
-          transparent
-          blending={THREE.AdditiveBlending}
-          depthWrite={false}
-        />
-      </points>
-      <lineSegments ref={lineRef} geometry={lineGeometry} material={lineMaterial} />
+      <Starfield />
+      {ribbons.map((r, i) => (
+        <AuroraRibbon key={i} index={i} color1={r.color1} color2={r.color2} yOffset={r.y} />
+      ))}
+      {shapes.map((s, i) => (
+        <FloatingShape key={i} position={s.pos} rotation={s.rot} speed={s.speed} scale={s.scale} color={s.color} />
+      ))}
     </group>
   );
 }
 
-/* ─────────────────────────────────────────────
-   About Section — Morphing Holographic Sphere
-   ───────────────────────────────────────────── */
-function HolographicSphere() {
-  const meshRef = useRef<THREE.Mesh>(null);
-  const materialRef = useRef<THREE.ShaderMaterial>(null);
-  const ringRef1 = useRef<THREE.Mesh>(null);
-  const ringRef2 = useRef<THREE.Mesh>(null);
-  const ringRef3 = useRef<THREE.Mesh>(null);
-  const particlesRef = useRef<THREE.Points>(null);
-  const hoverRef = useRef(0);
+/* ═══════════════════════════════════════════════
+   ABOUT — Crystalline Torus Knot with Data Streams
+   ═══════════════════════════════════════════════ */
 
-  // Orbiting particles
-  const orbitData = useMemo(() => {
-    const count = 80;
-    const pos = new Float32Array(count * 3);
-    const sizes = new Float32Array(count);
-    const angles = new Float32Array(count);
-    const radii = new Float32Array(count);
-    const yOffsets = new Float32Array(count);
-    const speeds = new Float32Array(count);
+function CrystalKnot() {
+  const knotRef = useRef<THREE.Mesh>(null);
+  const matRef = useRef<THREE.ShaderMaterial>(null);
+  const streamMatRef = useRef<THREE.ShaderMaterial>(null);
+  const coreRef = useRef<THREE.Mesh>(null);
+  const ring1Ref = useRef<THREE.Mesh>(null);
+  const ring2Ref = useRef<THREE.Mesh>(null);
 
-    for (let i = 0; i < count; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const r = 2.2 + Math.random() * 1.0;
-      const yOff = (Math.random() - 0.5) * 3.0;
+  // Data stream particles orbiting the knot
+  const streamCount = 120;
+  const streamData = useMemo(() => {
+    const angles = new Float32Array(streamCount);
+    const speeds = new Float32Array(streamCount);
+    const radii = new Float32Array(streamCount);
+    const positions = new Float32Array(streamCount * 3); // placeholder
 
-      pos[i * 3] = Math.cos(angle) * r;
-      pos[i * 3 + 1] = yOff;
-      pos[i * 3 + 2] = Math.sin(angle) * r;
-
-      sizes[i] = 0.02 + Math.random() * 0.04;
-      angles[i] = angle;
-      radii[i] = r;
-      yOffsets[i] = yOff;
-      speeds[i] = 0.3 + Math.random() * 0.7;
+    for (let i = 0; i < streamCount; i++) {
+      angles[i] = Math.random() * Math.PI * 2;
+      speeds[i] = 0.3 + Math.random() * 0.8;
+      radii[i] = 0.7 + Math.random() * 0.4;
+      positions[i * 3] = 0;
+      positions[i * 3 + 1] = 0;
+      positions[i * 3 + 2] = 0;
     }
-
-    return { positions: pos, sizes, angles, radii, yOffsets, speeds, count };
+    return { angles, speeds, radii, positions };
   }, []);
 
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
 
-    // Hover smoothing
-    hoverRef.current += (0 - hoverRef.current) * 0.05;
-
-    if (meshRef.current && materialRef.current) {
-      meshRef.current.rotation.y = t * 0.15;
-      meshRef.current.rotation.x = Math.sin(t * 0.1) * 0.15;
-      materialRef.current.uniforms.uTime.value = t;
-      materialRef.current.uniforms.uHover.value = hoverRef.current;
+    if (knotRef.current) {
+      knotRef.current.rotation.x = t * 0.1;
+      knotRef.current.rotation.y = t * 0.15;
+    }
+    if (matRef.current) {
+      matRef.current.uniforms.uTime.value = t;
+    }
+    if (streamMatRef.current) {
+      streamMatRef.current.uniforms.uTime.value = t;
     }
 
-    // Animate rings
-    if (ringRef1.current) {
-      ringRef1.current.rotation.z = t * 0.3;
-      ringRef1.current.rotation.x = Math.PI / 3 + Math.sin(t * 0.2) * 0.1;
-    }
-    if (ringRef2.current) {
-      ringRef2.current.rotation.z = -t * 0.2;
-      ringRef2.current.rotation.y = t * 0.15;
-    }
-    if (ringRef3.current) {
-      ringRef3.current.rotation.z = t * 0.25;
-      ringRef3.current.rotation.x = Math.PI / 2 + Math.cos(t * 0.15) * 0.2;
+    // Pulsing core
+    if (coreRef.current) {
+      const pulse = 1 + Math.sin(t * 2) * 0.15;
+      coreRef.current.scale.setScalar(pulse);
     }
 
-    // Animate orbiting particles
-    if (particlesRef.current) {
-      const pos = particlesRef.current.geometry.attributes.position.array as Float32Array;
-      for (let i = 0; i < orbitData.count; i++) {
-        const angle = orbitData.angles[i] + t * orbitData.speeds[i];
-        const r = orbitData.radii[i] + Math.sin(t * 2 + i) * 0.1;
-        pos[i * 3] = Math.cos(angle) * r;
-        pos[i * 3 + 1] = orbitData.yOffsets[i] + Math.sin(t + i * 0.5) * 0.3;
-        pos[i * 3 + 2] = Math.sin(angle) * r;
-      }
-      particlesRef.current.geometry.attributes.position.needsUpdate = true;
+    // Rotating rings
+    if (ring1Ref.current) {
+      ring1Ref.current.rotation.z = t * 0.5;
+      ring1Ref.current.rotation.x = Math.PI / 2 + Math.sin(t * 0.3) * 0.2;
+    }
+    if (ring2Ref.current) {
+      ring2Ref.current.rotation.z = -t * 0.35;
+      ring2Ref.current.rotation.y = t * 0.2;
     }
   });
 
-  const onPointerEnter = useCallback(() => { hoverRef.current = 1; }, []);
-
   return (
     <group>
-      {/* Main morphing sphere */}
-      <mesh ref={meshRef} onPointerEnter={onPointerEnter}>
-        <icosahedronGeometry args={[1.8, 64]} />
+      {/* Main torus knot with glow shader */}
+      <mesh ref={knotRef}>
+        <torusKnotGeometry args={[1.6, 0.35, 200, 32, 2, 3]} />
         <shaderMaterial
-          ref={materialRef}
-          vertexShader={sphereVertexShader}
-          fragmentShader={sphereFragmentShader}
+          ref={matRef}
+          vertexShader={knotVert}
+          fragmentShader={knotFrag}
           uniforms={{
             uTime: { value: 0 },
-            uHover: { value: 0 },
-            uColor1: { value: new THREE.Color(0x0078ff) },
-            uColor2: { value: new THREE.Color(0x00d4ff) },
-            uColor3: { value: new THREE.Color(0x7b2fff) },
+            uColor1: { value: new THREE.Color(0x00d4ff) },
+            uColor2: { value: new THREE.Color(0x7b2fff) },
           }}
           transparent
-          side={THREE.DoubleSide}
           depthWrite={false}
+          side={THREE.DoubleSide}
         />
       </mesh>
 
-      {/* Ring 1 — large tilted */}
-      <mesh ref={ringRef1} rotation={[Math.PI / 3, 0, 0]}>
-        <torusGeometry args={[2.6, 0.008, 4, 128]} />
-        <meshBasicMaterial color={0x7b2fff} transparent opacity={0.5} />
+      {/* Wireframe overlay for crystalline look */}
+      <mesh rotation={[0, 0, 0]}>
+        <torusKnotGeometry args={[1.62, 0.36, 80, 8, 2, 3]} />
+        <meshBasicMaterial color={0x00d4ff} wireframe transparent opacity={0.04} />
       </mesh>
 
-      {/* Ring 2 — medium */}
-      <mesh ref={ringRef2} rotation={[Math.PI / 5, 0, Math.PI / 4]}>
-        <torusGeometry args={[2.1, 0.006, 4, 96]} />
-        <meshBasicMaterial color={0x00d4ff} transparent opacity={0.3} />
+      {/* Energy core at center */}
+      <mesh ref={coreRef}>
+        <sphereGeometry args={[0.3, 16, 16]} />
+        <meshBasicMaterial color={0x00d4ff} transparent opacity={0.15} />
+      </mesh>
+      <mesh ref={coreRef}>
+        <sphereGeometry args={[0.15, 12, 12]} />
+        <meshBasicMaterial color={0xffffff} transparent opacity={0.4} />
       </mesh>
 
-      {/* Ring 3 — inner fast */}
-      <mesh ref={ringRef3} rotation={[Math.PI / 2, 0, 0]}>
-        <torusGeometry args={[1.5, 0.004, 4, 64]} />
-        <meshBasicMaterial color={0x0078ff} transparent opacity={0.2} />
-      </mesh>
-
-      {/* Orbiting particles */}
-      <points ref={particlesRef}>
+      {/* Data stream particles */}
+      <points>
         <bufferGeometry>
-          <bufferAttribute attach="attributes-position" args={[orbitData.positions, 3]} />
+          <bufferAttribute attach="attributes-position" args={[streamData.positions, 3]} />
+          <bufferAttribute attach="attributes-aAngle" args={[streamData.angles, 1]} />
+          <bufferAttribute attach="attributes-aSpeed" args={[streamData.speeds, 1]} />
+          <bufferAttribute attach="attributes-aRadius" args={[streamData.radii, 1]} />
         </bufferGeometry>
-        <pointsMaterial
-          color={0x00d4ff}
-          size={0.04}
+        <shaderMaterial
+          ref={streamMatRef}
+          vertexShader={streamVert}
+          fragmentShader={streamFrag}
+          uniforms={{
+            uTime: { value: 0 },
+            uColor: { value: new THREE.Color(0x00d4ff) },
+            uPixelRatio: { value: typeof window !== "undefined" ? Math.min(window.devicePixelRatio, 2) : 1 },
+          }}
           transparent
-          opacity={0.9}
           blending={THREE.AdditiveBlending}
           depthWrite={false}
-          sizeAttenuation
         />
       </points>
 
-      {/* Ambient glow */}
+      {/* Orbital ring 1 */}
+      <mesh ref={ring1Ref} rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[2.8, 0.006, 4, 96]} />
+        <meshBasicMaterial color={0x7b2fff} transparent opacity={0.35} />
+      </mesh>
+
+      {/* Orbital ring 2 */}
+      <mesh ref={ring2Ref} rotation={[Math.PI / 3, 0, Math.PI / 6]}>
+        <torusGeometry args={[2.3, 0.005, 4, 80]} />
+        <meshBasicMaterial color={0x00d4ff} transparent opacity={0.2} />
+      </mesh>
+
+      {/* Ambient glow shell */}
       <mesh>
-        <sphereGeometry args={[2.8, 16, 16]} />
-        <meshBasicMaterial color={0x0078ff} transparent opacity={0.02} side={THREE.BackSide} />
+        <sphereGeometry args={[3.2, 16, 16]} />
+        <meshBasicMaterial color={0x0078ff} transparent opacity={0.015} side={THREE.BackSide} />
       </mesh>
     </group>
   );
 }
 
-/* ── Pause rendering when off-screen ── */
+/* ═══════════════════════════════════════════════
+   Shared — Pause rendering when off-screen
+   ═══════════════════════════════════════════════ */
 function FrameControl() {
   const { gl } = useThree();
   useEffect(() => {
@@ -651,17 +586,19 @@ function FrameControl() {
   return null;
 }
 
-/* ── Scene3D Component ── */
+/* ═══════════════════════════════════════════════
+   Scene3D Export
+   ═══════════════════════════════════════════════ */
 export default function Scene3D({ type }: { type: "hero" | "sphere" }) {
   if (type === "hero") {
     return (
       <Canvas
-        camera={{ position: [0, 0, 70], fov: 60 }}
+        camera={{ position: [0, 0, 45], fov: 60 }}
         dpr={[1, 1.5]}
         gl={{ antialias: false, alpha: true, powerPreference: "high-performance" }}
         style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
       >
-        <HeroParticleField />
+        <HeroScene />
         <FrameControl />
       </Canvas>
     );
@@ -669,12 +606,12 @@ export default function Scene3D({ type }: { type: "hero" | "sphere" }) {
 
   return (
     <Canvas
-      camera={{ position: [0, 0, 5.5], fov: 50 }}
+      camera={{ position: [0, 0, 6], fov: 50 }}
       dpr={[1, 1.5]}
       gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
       style={{ width: "100%", height: "100%" }}
     >
-      <HolographicSphere />
+      <CrystalKnot />
       <FrameControl />
     </Canvas>
   );

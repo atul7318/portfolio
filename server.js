@@ -4,7 +4,6 @@ const path = require("path");
 const port = process.env.PORT || "8080";
 const hostname = "0.0.0.0";
 
-// Resolve the next CLI entry point (works cross-platform)
 const nextCli = require.resolve("next/dist/bin/next");
 
 console.log(`[server.js] Starting Next.js on http://${hostname}:${port}`);

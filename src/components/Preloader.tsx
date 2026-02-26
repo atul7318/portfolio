@@ -1,10 +1,7 @@
 "use client";
-
 import { useEffect, useState } from "react";
-
 export default function Preloader() {
   const [hidden, setHidden] = useState(false);
-
   useEffect(() => {
     const timer = setTimeout(() => setHidden(true), 2200);
     return () => clearTimeout(timer);

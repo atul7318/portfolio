@@ -11,6 +11,7 @@ const items = [
   "Hybrid Search RAG",
   "Vector Search",
   "Conversational RAG",
+  
 ];
 
 export default function Ticker() {
